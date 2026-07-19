@@ -1,6 +1,6 @@
 from flask import Flask, render_template, request, jsonify
-from services.comic_generator import generate_comic
-from services.quiz_generator import generate_quiz
+from services.content_generator import generate_comic_and_quiz
+from services.comic_generator import build_panels_from_captions
 
 app = Flask(__name__)
 
@@ -9,46 +9,33 @@ app = Flask(__name__)
 def home():
     return render_template("index.html")
 
-# ---------------- Comic API ----------------
-@app.route("/api/generate-comic", methods=["POST"])
-def comic():
+
+# ---------------- Combined Comic + Quiz API ----------------
+# Uses ONE Gemini call for captions + quiz + mind map (saves free-tier quota),
+# then generates images separately via the free Pollinations service.
+@app.route("/api/generate-all", methods=["POST"])
+def generate_all():
     try:
         data = request.get_json()
         notes = data.get("notes")
         panel_count = int(data.get("panelCount", 4))
-
-        if not notes:
-            return jsonify({"error": "Notes are required."}), 400
-
-        panels = generate_comic(notes, panel_count)
-
-        if not panels:
-            return jsonify({"error": "Comic generation returned no panels. Please try again."}), 500
-
-        return jsonify({"panels": panels}), 200
-
-    except Exception as e:
-        return jsonify({"error": str(e)}), 500
-
-
-# ---------------- Quiz API ----------------
-@app.route("/api/generate-quiz", methods=["POST"])
-def quiz():
-    try:
-        data = request.get_json()
-        notes = data.get("notes")
         question_count = int(data.get("questionCount", 5))
 
         if not notes:
             return jsonify({"error": "Notes are required."}), 400
 
-        result = generate_quiz(notes, question_count)
+        content = generate_comic_and_quiz(notes, panel_count, question_count)
+        panels = build_panels_from_captions(content["panelCaptions"])
 
-        if not result or not result.get("questions"):
-            return jsonify({"error": "Quiz generation returned no questions. Please try again."}), 500
+        return jsonify({
+            "panels": panels,
+            "mindMap": content["mindMap"],
+            "questions": content["questions"]
+        }), 200
 
-        return jsonify(result), 200
-
+    except ValueError as e:
+        # Friendly, expected errors (quota exceeded, bad model output, etc.)
+        return jsonify({"error": str(e)}), 429 if "quota" in str(e).lower() else 500
     except Exception as e:
         return jsonify({"error": str(e)}), 500
 
