@@ -87,6 +87,17 @@ if (transformBtn) {
       console.log("[app.js] Comic response status:", comicRes.status);
       console.log("[app.js] Quiz response status:", quizRes.status);
 
+      // Guard against non-JSON responses (e.g. Render's cold-start HTML page,
+      // or any proxy/error page that isn't actual API JSON)
+      const comicCT = comicRes.headers.get("content-type") || "";
+      const quizCT = quizRes.headers.get("content-type") || "";
+
+      if (!comicCT.includes("application/json") || !quizCT.includes("application/json")) {
+        throw new Error(
+          "The server is still waking up (this can happen after inactivity). Please wait a few seconds and try again."
+        );
+      }
+
       const comicData = await comicRes.json();
       const quizData = await quizRes.json();
 
@@ -207,8 +218,8 @@ function renderResults(pct) {
   $("resultsHeadline").textContent = pass ? "Congratulations!" : "Keep Learning!";
   $("scoreText").textContent = pct + "%";
   $("resultsMessage").textContent = pass
-      ? "You're a learning superstar! Keep up the amazing work!"
-      : "Not quite there yet, but that's okay! Every challenge is an opportunity to grow — let's review together.";
+    ? "You're a learning superstar! Keep up the amazing work!"
+    : "Not quite there yet, but that's okay! Every challenge is an opportunity to grow — let's review together.";
 }
 
 $("retryQuizBtn")?.addEventListener("click", () => {
