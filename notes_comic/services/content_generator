@@ -1,0 +1,117 @@
+import os
+import json
+import time
+from dotenv import load_dotenv
+from google import genai
+from google.genai.errors import ClientError
+
+load_dotenv()
+
+client = genai.Client(api_key=os.getenv("GEMINI_API_KEY"))
+
+TEXT_MODEL = "gemini-flash-latest"
+
+MAX_RETRIES = 1
+RETRY_DELAY_SECONDS = 40  # Gemini's 429 errors usually suggest ~40s
+
+
+def _call_gemini_with_retry(prompt):
+    """Calls Gemini once, retrying on quota/rate errors, and raises a
+    friendly error if the daily quota is truly exhausted."""
+    last_error = None
+    for attempt in range(MAX_RETRIES + 1):
+        try:
+            response = client.models.generate_content(
+                model=TEXT_MODEL,
+                contents=prompt
+            )
+            return response.text.strip()
+        except ClientError as e:
+            last_error = str(e)
+            is_quota_error = "RESOURCE_EXHAUSTED" in last_error or "429" in last_error
+            if is_quota_error and attempt < MAX_RETRIES:
+                time.sleep(RETRY_DELAY_SECONDS)
+                continue
+            break
+
+    if last_error and ("RESOURCE_EXHAUSTED" in last_error or "429" in last_error):
+        raise ValueError(
+            "This app has hit its daily free AI quota. Please try again "
+            "after some time (quotas usually reset daily), or come back tomorrow."
+        )
+    raise ValueError(f"AI request failed: {last_error}")
+
+
+def generate_comic_and_quiz(notes, panel_count, question_count):
+    """
+    Single combined Gemini call that returns comic panel captions,
+    a mind map, and quiz questions all at once — to minimize API usage.
+
+    Returns: {
+      "panelCaptions": [str, ...],
+      "mindMap": {"mainTopic": str, "keyConcepts": [{"title": str, "details": [str]}]},
+      "questions": [{"question": str, "options": [str,str,str,str], "correctIndex": int}]
+    }
+    """
+    prompt = f"""
+You are an educational assistant turning study notes into learning material.
+
+Notes:
+\"\"\"
+{notes}
+\"\"\"
+
+Based on these notes, generate ALL of the following in one response:
+
+1. "panelCaptions": exactly {panel_count} short, vivid one-sentence visual
+   descriptions, one per comic panel, telling the story of these notes in order.
+2. "mindMap": a summary with "mainTopic" (string) and "keyConcepts"
+   (a list of {{"title": str, "details": [str, str]}} objects).
+3. "questions": exactly {question_count} multiple-choice questions testing
+   understanding of the notes, each with exactly 4 "options" and a
+   "correctIndex" (integer 0-3).
+
+Return ONLY valid JSON (no markdown, no code fences, no explanation) in
+EXACTLY this structure:
+
+{{
+  "panelCaptions": ["...", "..."],
+  "mindMap": {{
+    "mainTopic": "string",
+    "keyConcepts": [
+      {{"title": "string", "details": ["string", "string"]}}
+    ]
+  }},
+  "questions": [
+    {{"question": "string", "options": ["a","b","c","d"], "correctIndex": 0}}
+  ]
+}}
+"""
+
+    raw = _call_gemini_with_retry(prompt)
+    raw = raw.replace("```json", "").replace("```", "").strip()
+
+    try:
+        result = json.loads(raw)
+    except json.JSONDecodeError:
+        raise ValueError(f"Model did not return valid JSON: {raw[:300]}")
+
+    # ---- Validation ----
+    if not isinstance(result.get("panelCaptions"), list) or len(result["panelCaptions"]) == 0:
+        raise ValueError("Model response missing valid 'panelCaptions'.")
+
+    if not isinstance(result.get("questions"), list) or len(result["questions"]) == 0:
+        raise ValueError("Model response missing valid 'questions'.")
+
+    for q in result["questions"]:
+        if "question" not in q or "options" not in q or "correctIndex" not in q:
+            raise ValueError("A question is missing required fields.")
+        if not isinstance(q["options"], list) or len(q["options"]) != 4:
+            raise ValueError("A question does not have exactly 4 options.")
+        if not isinstance(q["correctIndex"], int) or not (0 <= q["correctIndex"] <= 3):
+            raise ValueError("A question has an invalid correctIndex.")
+
+    if "mindMap" not in result or "mainTopic" not in result.get("mindMap", {}):
+        result["mindMap"] = {"mainTopic": "Your Notes", "keyConcepts": []}
+
+    return result
