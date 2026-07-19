@@ -69,55 +69,41 @@ if (transformBtn) {
     $("loadingText").textContent = "Turning your notes into a story...";
 
     try {
-      console.log("[app.js] Sending requests to backend...");
+      console.log("[app.js] Sending request to backend...");
 
-      const [comicRes, quizRes] = await Promise.all([
-        fetch(`${API_BASE}/api/generate-comic`, {
-          method: "POST",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ notes, panelCount }),
-        }),
-        fetch(`${API_BASE}/api/generate-quiz`, {
-          method: "POST",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ notes, questionCount }),
-        }),
-      ]);
+      const res = await fetch(`${API_BASE}/api/generate-all`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ notes, panelCount, questionCount }),
+      });
 
-      console.log("[app.js] Comic response status:", comicRes.status);
-      console.log("[app.js] Quiz response status:", quizRes.status);
+      console.log("[app.js] Response status:", res.status);
 
       // Guard against non-JSON responses (e.g. Render's cold-start HTML page,
       // or any proxy/error page that isn't actual API JSON)
-      const comicCT = comicRes.headers.get("content-type") || "";
-      const quizCT = quizRes.headers.get("content-type") || "";
-
-      if (!comicCT.includes("application/json") || !quizCT.includes("application/json")) {
+      const contentType = res.headers.get("content-type") || "";
+      if (!contentType.includes("application/json")) {
         throw new Error(
           "The server is still waking up (this can happen after inactivity). Please wait a few seconds and try again."
         );
       }
 
-      const comicData = await comicRes.json();
-      const quizData = await quizRes.json();
+      const data = await res.json();
+      console.log("[app.js] Data:", data);
 
-      console.log("[app.js] Comic data:", comicData);
-      console.log("[app.js] Quiz data:", quizData);
+      if (!res.ok) throw new Error(data.error || "Generation failed.");
 
-      if (!comicRes.ok) throw new Error(comicData.error || "Comic generation failed.");
-      if (!quizRes.ok) throw new Error(quizData.error || "Quiz generation failed.");
-
-      if (!comicData.panels || !Array.isArray(comicData.panels) || comicData.panels.length === 0) {
+      if (!data.panels || !Array.isArray(data.panels) || data.panels.length === 0) {
         throw new Error("Comic generation failed — no panels returned.");
       }
-      if (!quizData.questions || !Array.isArray(quizData.questions) || quizData.questions.length === 0) {
+      if (!data.questions || !Array.isArray(data.questions) || data.questions.length === 0) {
         throw new Error("Quiz generation failed — no questions returned.");
       }
 
-      state.comicPanels = comicData.panels;
-      state.mindMap = quizData.mindMap || null;
-      state.questions = quizData.questions;
-      state.answers = new Array(quizData.questions.length).fill(null);
+      state.comicPanels = data.panels;
+      state.mindMap = data.mindMap || null;
+      state.questions = data.questions;
+      state.answers = new Array(data.questions.length).fill(null);
 
       renderComic();
       console.log("[app.js] Comic rendered successfully");
